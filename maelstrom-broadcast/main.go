@@ -3,18 +3,32 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"sync"
 
 	ms "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 type node struct {
 	n        *ms.Node
+	mu       *sync.Mutex
 	messages []float64
 	topology map[string][]string
 }
 
 type t_msg struct {
 	topology map[string][]string `json:"topology"`
+}
+
+func (node node) broadcast() error {
+	connected_nodes := node.topology[node.n.ID()]
+	for _, adjacent_node := range connected_nodes {
+		go func() {
+			if error := node.n.Send(adjacent_node, node.messages); error != nil {
+				panic(error)
+			}
+		}()
+	}
+	return nil
 }
 
 func main() {
@@ -29,10 +43,17 @@ func main() {
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
+		node.mu.Lock()
 		node.messages = append(node.messages, body["message"].(float64))
+
+		if err := node.broadcast(); err != nil {
+			return err
+		}
+
 		node.n.Reply(msg, map[string]any{
 			"type": "broadcast_ok",
 		})
+		node.mu.Unlock()
 		return nil
 	})
 
